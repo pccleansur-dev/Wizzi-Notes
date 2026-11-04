@@ -28,6 +28,7 @@ export interface ChatMessage {
 export type ActiveTab = 'dashboard' | 'transcribe' | 'notes' | 'files-chat' | 'settings';
 
 export type AIProvider = 'gemini' | 'openai' | 'anthropic' | 'local';
+export type AsrProvider = 'whisper' | 'nemotron';
 
 export interface AIProviderConfig {
   provider: AIProvider;

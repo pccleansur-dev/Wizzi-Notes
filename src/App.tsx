@@ -45,7 +45,7 @@ import {
   Minimize2,
   Cpu,
 } from 'lucide-react';
-import { Note, ActiveTab, AIProviderConfig, AIProvider, DEFAULT_PROVIDER_CONFIG, PROVIDER_OPTIONS, LOCAL_MODELS, GpuProfile, QuantLevel, QUANT_OPTIONS, ggufFilename, ggufDownloadUrl, effectiveScores, CapabilityScores } from './types';
+import { Note, ActiveTab, AIProviderConfig, AIProvider, AsrProvider, DEFAULT_PROVIDER_CONFIG, PROVIDER_OPTIONS, LOCAL_MODELS, GpuProfile, QuantLevel, QUANT_OPTIONS, ggufFilename, ggufDownloadUrl, effectiveScores, CapabilityScores } from './types';
 import UploadZone from './components/UploadZone';
 import TranscriptView from './components/TranscriptView';
 import AIChatSidebar from './components/AIChatSidebar';
@@ -378,6 +378,13 @@ export default function App() {
   const [loadedModel, setLoadedModel] = useState<string>('');
   const [hoveredModelId, setHoveredModelId] = useState<string | null>(null);
   const [whisperInfo, setWhisperInfo] = useState<{ model: string; available: boolean } | null>(null);
+  const [asrProvider, setAsrProvider] = useState<AsrProvider>(() =>
+    localStorage.getItem('wizzi_asr_provider') === 'nemotron' ? 'nemotron' : 'whisper'
+  );
+  const [asrStatus, setAsrStatus] = useState<{
+    whisper: { model: string; available: boolean };
+    nemotron: { model: string; available: boolean };
+  } | null>(null);
   const [whisperSwitching, setWhisperSwitching] = useState<string | null>(null);
   const [whisperHint, setWhisperHint] = useState<string | null>(null);
   const [modelDownloads, setModelDownloads] = useState<Record<string, { state: 'idle'|'downloading'|'done'|'error'; percent: number; error: string }>>({});
@@ -400,6 +407,10 @@ export default function App() {
     fetch('/api/whisper/model')
       .then(r => r.json())
       .then(d => setWhisperInfo(d))
+      .catch(() => {});
+    fetch('/api/asr/status')
+      .then(r => r.json())
+      .then(d => setAsrStatus(d))
       .catch(() => {});
   }, []);
 
@@ -506,7 +517,7 @@ export default function App() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
-          body: JSON.stringify({ fileData: base64, mimeType }),
+          body: JSON.stringify({ fileData: base64, mimeType, asrProvider }),
           signal: AbortSignal.timeout(28000),
         });
         const text = res.ok ? (JSON.parse(await res.text())?.text?.trim() ?? '') : '';
@@ -521,7 +532,7 @@ export default function App() {
     })();
 
     inFlightRef.current.add(promise);
-  }, [flushOrderedResults]);
+  }, [flushOrderedResults, asrProvider]);
 
   const handleToggleRecording = useCallback(async () => {
     if (isRecording) { handleStopRecording(); return; }
@@ -1973,6 +1984,7 @@ ${noteToExport.transcription || 'Sin guion transcrito registrado.'}
                   <h3 className="font-headline text-headline-sm text-on-surface">Procesamiento de Archivos y Grounding</h3>
                   <UploadZone
                     providerConfig={providerConfig}
+                    asrProvider={asrProvider}
                     onProcessStarted={handleProcessStarted}
                     onProcessError={handleProcessError}
                   />
@@ -3124,28 +3136,62 @@ ${noteToExport.transcription || 'Sin guion transcrito registrado.'}
 
                 </div>
 
-                {/* ── Whisper models ── */}
+                {/* ── Speech-to-text engine ── */}
                 <div className="bg-surface-container rounded-xl border border-white/5 p-lg space-y-lg shadow-md">
                   <div>
-                    <h3 className="text-[10px] font-extrabold text-on-surface-variant uppercase tracking-widest font-mono mb-xs">Modelo de Transcripción</h3>
-                    <p className="text-body-sm text-on-surface-variant">Whisper convierte audio a texto. Modelos más grandes son más precisos pero más lentos.</p>
+                    <h3 className="text-[10px] font-extrabold text-on-surface-variant uppercase tracking-widest font-mono mb-xs">Motor de transcripción</h3>
+                    <p className="text-body-sm text-on-surface-variant">Alterná entre Whisper y Nemotron 3.5 para comparar precisión y velocidad con el mismo audio.</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-sm" role="group" aria-label="Motor de transcripción">
+                    {([
+                      { id: 'whisper', label: 'Whisper', detail: 'Estable · varios tamaños' },
+                      { id: 'nemotron', label: 'Nemotron 3.5', detail: '600M · streaming · 40 idiomas' },
+                    ] as const).map(engine => {
+                      const active = asrProvider === engine.id;
+                      const available = asrStatus?.[engine.id]?.available;
+                      return (
+                        <button
+                          key={engine.id}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() => {
+                            setAsrProvider(engine.id);
+                            localStorage.setItem('wizzi_asr_provider', engine.id);
+                          }}
+                          className={`text-left rounded-xl border p-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+                            active
+                              ? 'bg-primary/10 border-primary/40'
+                              : 'bg-surface-container-high border-white/5 hover:border-white/15'
+                          }`}
+                        >
+                          <span className="flex items-center justify-between gap-sm">
+                            <span className={`font-bold text-body-sm ${active ? 'text-primary' : 'text-on-surface'}`}>{engine.label}</span>
+                            <span className={`text-[9px] font-mono ${available ? 'text-emerald-400' : available === false ? 'text-red-400' : 'text-on-surface-variant/50'}`}>
+                              {available ? 'DISPONIBLE' : available === false ? 'SIN CONEXIÓN' : 'VERIFICANDO'}
+                            </span>
+                          </span>
+                          <span className="block text-[10px] text-on-surface-variant/60 mt-1">{engine.detail}</span>
+                        </button>
+                      );
+                    })}
                   </div>
 
                   {/* Active model status */}
                   <div className="flex items-center justify-between bg-surface-container-high rounded-lg px-md py-sm border border-white/5">
                     <div className="flex items-center gap-2">
-                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${whisperInfo?.available ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'}`} />
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${asrStatus?.[asrProvider]?.available ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'}`} />
                       <span className="text-[11px] text-on-surface-variant/70 font-mono">
-                        {whisperInfo?.available
-                          ? <><span className="text-emerald-400 font-bold">▶ Cargado:</span> whisper-{whisperInfo.model}</>
-                          : whisperInfo ? 'Whisper no disponible' : 'Verificando...'}
+                        {asrStatus?.[asrProvider]?.available
+                          ? <><span className="text-emerald-400 font-bold">▶ Activo:</span> {asrStatus[asrProvider].model}</>
+                          : asrStatus ? `${asrProvider === 'nemotron' ? 'Nemotron' : 'Whisper'} no disponible` : 'Verificando...'}
                       </span>
                     </div>
                     <button onClick={fetchLoadedModel} className="text-[9px] text-on-surface-variant/40 hover:text-emerald-400 transition-colors cursor-pointer font-mono shrink-0">↻</button>
                   </div>
 
                   {/* Model cards */}
-                  {(() => {
+                  {asrProvider === 'whisper' ? (() => {
                     const WHISPER_MODELS = [
                       { id: 'tiny',     label: 'Tiny',     params: '39M',  sizeGb: '~0.1', vram: '~1 GB',  speed: 5, quality: 1, desc: 'Ultra rápido. Bueno para pruebas o voz muy clara.' },
                       { id: 'base',     label: 'Base',     params: '74M',  sizeGb: '~0.1', vram: '~1 GB',  speed: 4, quality: 2, desc: 'Rápido y liviano. Funciona bien en CPU.' },
@@ -3250,7 +3296,20 @@ ${noteToExport.transcription || 'Sin guion transcrito registrado.'}
                         )}
                       </div>
                     );
-                  })()}
+                  })() : (
+                    <div className="rounded-xl border border-primary/20 bg-primary/5 p-md space-y-sm">
+                      <div className="flex items-center justify-between gap-md">
+                        <div>
+                          <p className="font-bold text-body-sm text-on-surface">Nemotron 3.5 ASR Streaming</p>
+                          <p className="text-[10px] text-on-surface-variant/60 mt-1">Q8 · 0.6B parámetros · idioma es-ES · aceleración CUDA</p>
+                        </div>
+                        <span className="text-[9px] font-mono text-primary border border-primary/20 rounded-full px-2 py-1">EXPERIMENTAL</span>
+                      </div>
+                      <p className="text-[10px] text-on-surface-variant/70 leading-relaxed">
+                        Recomendado para pruebas A/B. Whisper continúa disponible como alternativa inmediata si una grabación obtiene peores resultados.
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 {/* Storage mode */}

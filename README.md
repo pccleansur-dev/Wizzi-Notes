@@ -65,3 +65,21 @@ A continuación, tienes los scripts listos para la producción o verificación:
 *   `npm run build`: Compila la SPA de React y empaqueta el servidor Express compilado optimizadamente usando `esbuild` en la carpeta `dist/`.
 *   `npm run start`: Inicia el servidor optimizado de producción desde `dist/server.cjs`.
 *   `npm run lint`: Ejecuta el validador estático de tipos de TypeScript.
+
+## Probar Nemotron 3.5 como alternativa a Whisper
+
+Wizzi Note permite elegir **Whisper** o **Nemotron 3.5 ASR** desde Configuración. Whisper sigue siendo el motor predeterminado.
+
+Nemotron usa el runtime oficial [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) y el modelo `nvidia/nemotron-3.5-asr-streaming-0.6b`.
+
+1. Instalá NeMo-Speech.cpp con backend CUDA dentro de `tools/nemo-speech`.
+2. Guardá `nemotron-3.5-asr-streaming-0.6b.q8_0.gguf` en `models/nemotron/`.
+3. Iniciá el servidor local:
+
+```powershell
+.\scripts\start-nemotron.ps1
+```
+
+4. Iniciá Wizzi Note y seleccioná **Nemotron 3.5** en Configuración → Motor de transcripción.
+
+El runtime y el modelo están excluidos de Git. La evaluación inicial y el protocolo de comparación están en [`docs/NEMOTRON-EVALUATION.md`](docs/NEMOTRON-EVALUATION.md).

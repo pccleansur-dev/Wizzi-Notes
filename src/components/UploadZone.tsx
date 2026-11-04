@@ -1,16 +1,18 @@
 import React, { useState, useRef } from 'react';
 import { Upload, FileText, AlertCircle, Sparkles } from 'lucide-react';
 import { motion } from 'motion/react';
-import { AIProviderConfig, PROVIDER_OPTIONS } from '../types';
+import { AIProviderConfig, AsrProvider, PROVIDER_OPTIONS } from '../types';
 
 interface UploadZoneProps {
   providerConfig: AIProviderConfig;
+  asrProvider: AsrProvider;
   onProcessStarted: (jobId?: string) => void;
   onProcessError: (errorMsg: string) => void;
 }
 
 export default function UploadZone({
   providerConfig,
+  asrProvider,
   onProcessStarted,
   onProcessError,
 }: UploadZoneProps) {
@@ -124,6 +126,7 @@ export default function UploadZone({
         body: JSON.stringify({
           provider,
           model: currentModel,
+          asrProvider,
           type: isPdf ? 'pdf' : 'multimodal',
           fileData: base64Data,
           mimeType: finalMime,

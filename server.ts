@@ -12,6 +12,7 @@ import session from 'express-session';
 import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import dotenv from 'dotenv';
+import { transcribeAudio, resolveAsrProvider, type AsrProvider } from './src/server/asr';
 
 dotenv.config();
 
@@ -488,28 +489,31 @@ async function chatWithAnthropic(message: string, transcript: string, history: a
   return response.content[0].type === 'text' ? response.content[0].text : '';
 }
 
-// ─── Local (Ollama + Whisper) ─────────────────────────────────────────────────
+// ─── Local (Llama.cpp + selectable ASR) ──────────────────────────────────────
 
 const LLAMACPP_URL      = process.env.LLAMACPP_URL || 'http://llamacpp:8080';
 const WHISPER_URL       = process.env.WHISPER_URL  || 'http://localhost:9000';
+const NEMOTRON_URL      = process.env.NEMOTRON_URL || 'http://localhost:9010';
+const ASR_LANGUAGE      = process.env.ASR_LANGUAGE || 'es-ES';
+const DEFAULT_ASR_PROVIDER = resolveAsrProvider(process.env.ASR_PROVIDER);
 const HW_AGENT_URL      = 'http://host.docker.internal:3099';
 
-async function transcribeWithWhisper(fileData: string, mimeType: string): Promise<string> {
-  const buffer = Buffer.from(fileData, 'base64');
-  const ext = mimeType.split('/')[1]?.replace('x-', '') || 'webm';
-  console.log(`[Whisper] Sending ${buffer.length} bytes, type: ${mimeType}, ext: ${ext}`);
-  const blob = new Blob([buffer], { type: mimeType });
-  const form = new FormData();
-  form.append('audio_file', blob, `audio.${ext}`);
-  const res = await fetch(`${WHISPER_URL}/asr?output=json&language=es&task=transcribe&word_timestamps=false`, {
-    method: 'POST',
-    body: form,
-  });
-  if (!res.ok) throw new Error(`Whisper error: ${res.status}`);
-  const data: any = await res.json();
-  console.log('[Whisper response]', JSON.stringify(data));
-  const raw = data.text || '';
-  return raw.replace(/<\|[^|]+\|>/g, '').trim();
+async function transcribeWithAsr(
+  fileData: string,
+  mimeType: string,
+  requestedProvider?: AsrProvider,
+): Promise<string> {
+  const provider = resolveAsrProvider(requestedProvider ?? DEFAULT_ASR_PROVIDER);
+  console.log(`[ASR:${provider}] Sending ${Buffer.byteLength(fileData, 'base64')} bytes, type: ${mimeType}`);
+  return transcribeAudio(
+    { fileData, mimeType, provider },
+    {
+      defaultProvider: DEFAULT_ASR_PROVIDER,
+      language: ASR_LANGUAGE,
+      whisperUrl: WHISPER_URL,
+      nemotronUrl: NEMOTRON_URL,
+    },
+  );
 }
 
 // ─── Llama.cpp server (OpenAI-compatible API) ────────────────────────────────
@@ -665,14 +669,16 @@ function parseSectioned(text: string, fallbackTranscription: string) {
 }
 
 async function processWithLocal(body: any, model: string, jobId?: string) {
-  const { type, fileData, mimeType, text } = body;
+  const { type, fileData, mimeType, text, asrProvider } = body;
   const emit = (data: object) => emitProgress(jobId || '', data);
 
   let transcription = '';
 
   if (type === 'multimodal') {
-    emit({ stage: 'transcribing', message: 'Transcribiendo audio con Whisper...', percent: 5 });
-    transcription = await transcribeWithWhisper(fileData, mimeType);
+    const provider = resolveAsrProvider(asrProvider ?? DEFAULT_ASR_PROVIDER);
+    const label = provider === 'nemotron' ? 'Nemotron 3.5' : 'Whisper';
+    emit({ stage: 'transcribing', message: `Transcribiendo audio con ${label}...`, percent: 5 });
+    transcription = await transcribeWithAsr(fileData, mimeType, provider);
   } else {
     transcription = text || '';
   }
@@ -959,10 +965,11 @@ app.get('/api/result/:jobId', requireAuth, (req, res) => {
 });
 
 app.post('/api/transcribe-chunk', requireAuth, async (req, res) => {
-  const { fileData, mimeType } = req.body;
+  const { fileData, mimeType, asrProvider } = req.body;
   if (!fileData) return res.status(400).json({ error: 'fileData requerido' });
   try {
-    const text = await transcribeWithWhisper(fileData, mimeType || 'audio/webm');
+    const provider = resolveAsrProvider(asrProvider ?? DEFAULT_ASR_PROVIDER);
+    const text = await transcribeWithAsr(fileData, mimeType || 'audio/webm', provider);
     res.json({ text });
   } catch (e: any) {
     console.error('[transcribe-chunk]', e.message);
@@ -1248,6 +1255,26 @@ app.get('/api/whisper/model', requireAuth, async (req, res) => {
   } catch {
     res.json({ model, available: false });
   }
+});
+
+app.get('/api/asr/status', requireAuth, async (_req, res) => {
+  const check = async (url: string) => {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(3000) });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  };
+  const [whisperAvailable, nemotronAvailable] = await Promise.all([
+    check(`${WHISPER_URL}/docs`),
+    check(`${NEMOTRON_URL}/ready`),
+  ]);
+  res.json({
+    selected: DEFAULT_ASR_PROVIDER,
+    whisper: { available: whisperAvailable, model: process.env.ASR_MODEL || 'small' },
+    nemotron: { available: nemotronAvailable, model: 'nemotron-3.5-asr-streaming-0.6b' },
+  });
 });
 
 // ─── LLM model download (streams GGUF from HuggingFace → /models volume) ──────
