@@ -3251,7 +3251,7 @@ ${noteToExport.transcription || 'Sin guion transcrito registrado.'}
                         if (d.ok) {
                           if (d.restarted) {
                             setWhisperInfo(prev => ({ ...prev!, model: modelId }));
-                            showToast(`Ahora usamos Whisper ${modelId}`);
+                            showToast(`Ahora usamos Whisper ${modelId}. Si es la primera vez, descarga el modelo y puede tardar unos minutos`);
                           } else {
                             setWhisperHint(d.hint);
                             showToast(`Whisper ${modelId} todavía no se aplicó: falta cambiarlo en Coolify`, 'warn');

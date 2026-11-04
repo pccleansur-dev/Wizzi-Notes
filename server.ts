@@ -13,6 +13,8 @@ import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import dotenv from 'dotenv';
 import { transcribeAudio, resolveAsrProvider, type AsrProvider } from './src/server/asr';
+import { FileSessionStore } from './src/server/fileSessionStore';
+import { applyWhisperModel, getRunningWhisperModel, WHISPER_MODELS } from './src/server/dockerWhisper';
 
 dotenv.config();
 
@@ -51,6 +53,7 @@ app.use(helmet({
 
 // ─── Session & Passport ───────────────────────────────────────────────────────
 app.use(session({
+  store: new FileSessionStore(path.join(CONFIG_DIR, 'sessions')),
   secret: getOrCreateSessionSecret(),
   resave: false,
   saveUninitialized: false,
@@ -1258,8 +1261,19 @@ app.get('/api/llamacpp/model', requireAuth, async (req, res) => {
 });
 
 // Whisper model currently configured (from env, not discoverable via API)
+const WHISPER_MODEL_FILE = path.join(CONFIG_DIR, 'asr-model.txt');
+
+// Modelo real del contenedor de Whisper (si no se puede consultar Docker, el configurado por env)
+async function currentWhisperModel(): Promise<string> {
+  try {
+    const m = await getRunningWhisperModel();
+    if (m) return m;
+  } catch { /* sin acceso a Docker */ }
+  return process.env.ASR_MODEL || 'small';
+}
+
 app.get('/api/whisper/model', requireAuth, async (req, res) => {
-  const model = process.env.ASR_MODEL || 'small';
+  const model = await currentWhisperModel();
   try {
     const check = await fetch(`${WHISPER_URL}/docs`, { signal: AbortSignal.timeout(3000) });
     res.json({ model, available: check.ok });
@@ -1277,13 +1291,14 @@ app.get('/api/asr/status', requireAuth, async (_req, res) => {
       return false;
     }
   };
-  const [whisperAvailable, nemotronAvailable] = await Promise.all([
+  const [whisperAvailable, nemotronAvailable, whisperModel] = await Promise.all([
     check(`${WHISPER_URL}/docs`),
     check(`${NEMOTRON_URL}/ready`),
+    currentWhisperModel(),
   ]);
   res.json({
     selected: DEFAULT_ASR_PROVIDER,
-    whisper: { available: whisperAvailable, model: process.env.ASR_MODEL || 'small' },
+    whisper: { available: whisperAvailable, model: whisperModel },
     nemotron: { available: nemotronAvailable, model: 'nemotron-3.5-asr-streaming-0.6b' },
   });
 });
@@ -1458,8 +1473,20 @@ app.post('/api/llamacpp/set-model', requireAuth, async (req, res) => {
 // Change Whisper model: update .env + restart whisper container
 app.post('/api/whisper/set-model', requireAuth, async (req, res) => {
   const { model } = req.body as { model: string };
-  const VALID = ['tiny', 'base', 'small', 'medium', 'large', 'large-v2', 'large-v3'];
+  const VALID = WHISPER_MODELS as readonly string[];
   if (!VALID.includes(model)) return res.status(400).json({ error: 'Modelo inválido' });
+
+  // Camino principal: recrear el contenedor de Whisper con el modelo nuevo vía Docker (socket montado)
+  try {
+    await applyWhisperModel(model);
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    fs.writeFileSync(WHISPER_MODEL_FILE, model, 'utf8'); // se reaplica tras cada redespliegue
+    process.env.ASR_MODEL = model;
+    console.log(`[whisper] modelo cambiado a ${model}`);
+    return res.json({ ok: true, model, restarted: true });
+  } catch (e: any) {
+    console.warn('[whisper] no se pudo cambiar vía Docker, se usa el método manual:', e?.message || e);
+  }
 
   // Update .env file
   const envPath = path.resolve(process.cwd(), '.env');
@@ -1653,6 +1680,22 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Wizzi Note corriendo en: http://localhost:${PORT}`);
+
+    // Tras un redespliegue el compose recrea Whisper con el modelo por defecto: reaplicar el elegido por el usuario.
+    setTimeout(async () => {
+      try {
+        if (!fs.existsSync(WHISPER_MODEL_FILE)) return;
+        const wanted = fs.readFileSync(WHISPER_MODEL_FILE, 'utf8').trim();
+        if (!(WHISPER_MODELS as readonly string[]).includes(wanted)) return;
+        const running = await getRunningWhisperModel();
+        if (running && running !== wanted) {
+          console.log(`[whisper] reaplicando modelo elegido: ${running} -> ${wanted}`);
+          await applyWhisperModel(wanted);
+        }
+      } catch (e: any) {
+        console.warn('[whisper] no se pudo reaplicar el modelo guardado:', e?.message || e);
+      }
+    }, 15_000).unref();
   });
 }
 
