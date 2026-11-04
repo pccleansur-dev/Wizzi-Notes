@@ -504,8 +504,17 @@ async function transcribeWithAsr(
   requestedProvider?: AsrProvider,
 ): Promise<string> {
   const provider = resolveAsrProvider(requestedProvider ?? DEFAULT_ASR_PROVIDER);
-  console.log(`[ASR:${provider}] Sending ${Buffer.byteLength(fileData, 'base64')} bytes, type: ${mimeType}`);
-  return transcribeAudio(
+  const buf = Buffer.from(fileData, 'base64');
+  // Nivel RMS (0-1) para diagnosticar grabaciones silenciosas; solo WAV PCM16.
+  let rms = 'n/a';
+  if (mimeType === 'audio/wav' && buf.length > 46) {
+    let sum = 0;
+    const n = Math.floor((buf.length - 44) / 2);
+    for (let i = 0; i < n; i++) { const v = buf.readInt16LE(44 + i * 2) / 32768; sum += v * v; }
+    rms = (Math.sqrt(sum / Math.max(n, 1))).toFixed(4);
+  }
+  console.log(`[ASR:${provider}] Sending ${buf.length} bytes, type: ${mimeType}, rms: ${rms}`);
+  const text = await transcribeAudio(
     { fileData, mimeType, provider },
     {
       defaultProvider: DEFAULT_ASR_PROVIDER,
@@ -514,6 +523,8 @@ async function transcribeWithAsr(
       nemotronUrl: NEMOTRON_URL,
     },
   );
+  console.log(`[ASR:${provider}] -> ${text.length} chars${text ? `: "${text.slice(0, 80)}"` : ''}`);
+  return text;
 }
 
 // ─── Llama.cpp server (OpenAI-compatible API) ────────────────────────────────
