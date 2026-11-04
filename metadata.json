@@ -1,0 +1,6 @@
+{
+  "name": "Wizzi Note",
+  "description": "Aplicación inteligente de productividad para transcripción de audio/video, análisis de PDF, resúmenes de YouTube y notas de reuniones con IA.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

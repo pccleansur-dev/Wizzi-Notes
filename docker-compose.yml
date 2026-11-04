@@ -1,0 +1,73 @@
+services:
+  wizzi-note:
+    build: .
+    ports:
+      - "3001:3000"
+    env_file:
+      - .env
+    environment:
+      - LLAMACPP_URL=http://llamacpp:8080
+      - WHISPER_URL=http://whisper:9000
+    volumes:
+      - ./config:/app/config
+      - ./dist:/app/dist
+      - llamacpp_models:/models
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - llamacpp
+      - whisper
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  llamacpp:
+    image: ghcr.io/abetlen/llama-cpp-python:latest
+    container_name: wizzi-note-llamacpp-1
+    environment:
+      - MODEL=/models/active.gguf
+      - N_GPU_LAYERS=${LLAMA_GPU_LAYERS:-35}
+      - HOST=0.0.0.0
+      - PORT=8080
+      - CHAT_FORMAT=chatml
+    volumes:
+      - llamacpp_models:/models
+    ports:
+      - "8080:8080"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/v1/models')\" 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 90s
+    restart: unless-stopped
+
+  whisper:
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    environment:
+      - ASR_MODEL=small
+      - ASR_ENGINE=openai_whisper
+    volumes:
+      - whisper_models:/root/.cache/whisper
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/docs || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+    restart: unless-stopped
+
+volumes:
+  llamacpp_models:
+  whisper_models:

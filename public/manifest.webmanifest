@@ -1,0 +1,25 @@
+{
+  "name": "Wizzi Note",
+  "short_name": "Wizzi Note",
+  "description": "Suite de productividad con IA para transcribir, analizar documentos y chatear con tus archivos.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#131313",
+  "theme_color": "#7C3AED",
+  "lang": "es",
+  "icons": [
+    {
+      "src": "/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
