@@ -32,27 +32,33 @@ services:
       - whisper
     restart: unless-stopped
 
+  # GPU: Coolify corre en Docker dentro de WSL2 sin NVIDIA Container Toolkit,
+  # por eso se pasa /dev/dxg y las libs de WSL directamente.
   llamacpp:
-    image: ghcr.io/abetlen/llama-cpp-python:latest
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
     container_name: wizzi-note-llamacpp-1
+    entrypoint: ["/app/llama-server"]
+    command: ["-m", "/models/active.gguf", "--host", "0.0.0.0", "--port", "8080", "-ngl", "${LLAMA_GPU_LAYERS:-99}", "-c", "${LLAMA_CTX:-8192}"]
     environment:
-      - MODEL=/models/active.gguf
-      - N_GPU_LAYERS=${LLAMA_GPU_LAYERS:-0}
-      - HOST=0.0.0.0
-      - PORT=8080
-      - CHAT_FORMAT=chatml
+      - LD_LIBRARY_PATH=/usr/lib/wsl/lib
+    devices:
+      - /dev/dxg:/dev/dxg
     volumes:
       - llamacpp_models:/models
-    # GPU no disponible en el Docker de Coolify: llamacpp corre en CPU.
+      - /usr/lib/wsl:/usr/lib/wsl:ro
     restart: unless-stopped
 
   whisper:
-    image: onerahmet/openai-whisper-asr-webservice:latest
+    image: onerahmet/openai-whisper-asr-webservice:latest-gpu
     environment:
       - ASR_MODEL=small
       - ASR_ENGINE=openai_whisper
+      - LD_LIBRARY_PATH=/usr/lib/wsl/lib
+    devices:
+      - /dev/dxg:/dev/dxg
     volumes:
       - whisper_models:/root/.cache/whisper
+      - /usr/lib/wsl:/usr/lib/wsl:ro
     restart: unless-stopped
 
 volumes:
