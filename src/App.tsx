@@ -3233,12 +3233,16 @@ ${noteToExport.transcription || 'Sin guion transcrito registrado.'}
                         });
                         const d = await r.json();
                         if (d.ok) {
-                          setWhisperInfo(prev => ({ ...prev!, model: modelId }));
-                          if (!d.restarted) setWhisperHint(d.hint);
-                          showToast(`Ahora usamos Whisper ${modelId}`);
+                          if (d.restarted) {
+                            setWhisperInfo(prev => ({ ...prev!, model: modelId }));
+                            showToast(`Ahora usamos Whisper ${modelId}`);
+                          } else {
+                            setWhisperHint(d.hint);
+                            showToast(`Whisper ${modelId} todavía no se aplicó: falta cambiarlo en Coolify`, 'warn');
+                          }
                         }
                       } catch {
-                        setWhisperHint('docker compose restart whisper');
+                        setWhisperHint('ASR_MODEL=<modelo>');
                       } finally {
                         setWhisperSwitching(null);
                       }
@@ -3311,7 +3315,7 @@ ${noteToExport.transcription || 'Sin guion transcrito registrado.'}
                         {/* Restart hint */}
                         {whisperHint && (
                           <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-md py-sm space-y-1">
-                            <p className="text-[10px] font-bold text-amber-400">✓ .env actualizado — reiniciá Whisper para aplicar:</p>
+                            <p className="text-[10px] font-bold text-amber-400">El cambio no se aplicó automáticamente. En Coolify, cargá esta variable de entorno y hacé Redeploy:</p>
                             <code className="text-[10px] bg-black/30 px-2 py-1 rounded font-mono block text-emerald-400/80">{whisperHint}</code>
                           </div>
                         )}

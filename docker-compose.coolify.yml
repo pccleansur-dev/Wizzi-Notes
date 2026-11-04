@@ -21,6 +21,7 @@ services:
       - NEMOTRON_URL=${NEMOTRON_URL:-http://172.17.240.1:9010}
       - ASR_PROVIDER=${ASR_PROVIDER:-whisper}
       - ASR_LANGUAGE=${ASR_LANGUAGE:-es-ES}
+      - ASR_MODEL=${ASR_MODEL:-small}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -51,7 +52,7 @@ services:
   whisper:
     image: onerahmet/openai-whisper-asr-webservice:latest-gpu
     environment:
-      - ASR_MODEL=small
+      - ASR_MODEL=${ASR_MODEL:-small}
       - ASR_ENGINE=openai_whisper
       - LD_LIBRARY_PATH=/usr/lib/wsl/lib
     devices:

@@ -1471,7 +1471,6 @@ app.post('/api/whisper/set-model', requireAuth, async (req, res) => {
       content += `\nASR_MODEL=${model}\n`;
     }
     fs.writeFileSync(envPath, content, 'utf8');
-    process.env.ASR_MODEL = model;
   } catch (e) {
     return res.status(500).json({ error: 'No se pudo actualizar .env', detail: String(e) });
   }
@@ -1481,8 +1480,9 @@ app.post('/api/whisper/set-model', requireAuth, async (req, res) => {
   exec('docker compose restart whisper', { cwd: process.cwd() }, (err) => {
     if (err) {
       // Docker not available from inside container — return success anyway, user restarts manually
-      return res.json({ ok: true, model, restarted: false, hint: 'docker compose restart whisper' });
+      return res.json({ ok: true, model, restarted: false, hint: `ASR_MODEL=${model}` });
     }
+    process.env.ASR_MODEL = model;
     res.json({ ok: true, model, restarted: true });
   });
 });
