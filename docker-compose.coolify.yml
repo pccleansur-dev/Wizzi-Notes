@@ -37,19 +37,13 @@ services:
     container_name: wizzi-note-llamacpp-1
     environment:
       - MODEL=/models/active.gguf
-      - N_GPU_LAYERS=${LLAMA_GPU_LAYERS:-35}
+      - N_GPU_LAYERS=${LLAMA_GPU_LAYERS:-0}
       - HOST=0.0.0.0
       - PORT=8080
       - CHAT_FORMAT=chatml
     volumes:
       - llamacpp_models:/models
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # GPU no disponible en el Docker de Coolify: llamacpp corre en CPU.
     restart: unless-stopped
 
   whisper:
