@@ -18,7 +18,7 @@ services:
       - HOST_RAM_GB=${HOST_RAM_GB:-}
       - LLAMACPP_URL=http://llamacpp:8080
       - WHISPER_URL=http://whisper:9000
-      - NEMOTRON_URL=http://host.docker.internal:9010
+      - NEMOTRON_URL=${NEMOTRON_URL:-http://172.17.240.1:9010}
       - ASR_PROVIDER=${ASR_PROVIDER:-whisper}
       - ASR_LANGUAGE=${ASR_LANGUAGE:-es-ES}
     extra_hosts:
