@@ -389,6 +389,7 @@ export default function App() {
   const [whisperHint, setWhisperHint] = useState<string | null>(null);
   const [toast, setToast] = useState<{ id: number; message: string; tone: 'ok' | 'warn' } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const authLostRef = useRef(false);
   const showToast = useCallback((message: string, tone: 'ok' | 'warn' = 'ok') => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     setToast({ id: Date.now(), message, tone });
@@ -527,6 +528,7 @@ export default function App() {
           body: JSON.stringify({ fileData: base64, mimeType, asrProvider }),
           signal: AbortSignal.timeout(28000),
         });
+        if (res.status === 401) authLostRef.current = true;
         const text = res.ok ? (JSON.parse(await res.text())?.text?.trim() ?? '') : '';
         batchResultsRef.current.set(batchIdx, text);
       } catch {
@@ -562,6 +564,7 @@ export default function App() {
       nextExpectedBatchRef.current = 0;
       inFlightRef.current = new Set();
       audioChunksRef.current = [];
+      authLostRef.current = false;
       setLiveTranscription('');
       setChunksTranscribed(0);
 
@@ -633,7 +636,11 @@ export default function App() {
       liveTranscriptionRef.current = '';
 
       if (!fullTranscription.trim()) {
-        handleProcessError('No se detectó audio transcribible en la grabación.');
+        handleProcessError(
+          authLostRef.current
+            ? 'Tu sesión expiró. Recargá la página (Ctrl+F5) e iniciá sesión de nuevo.'
+            : 'No se detectó audio transcribible en la grabación.',
+        );
         return;
       }
 
