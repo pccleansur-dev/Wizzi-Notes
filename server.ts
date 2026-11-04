@@ -868,7 +868,9 @@ app.get('/api/auth/me', (req, res) => {
   const registered = !!readUserData(user.email);
   const needsRegistration = !allowed && !registered;
 
-  res.json({ user, authRequired: true, needsRegistration });
+  // El accessToken de Google se queda en la sesión del servidor: nunca se envía al navegador.
+  const { accessToken, ...safeUser } = user;
+  res.json({ user: { ...safeUser, hasDriveAccess: !!accessToken }, authRequired: true, needsRegistration });
 });
 
 app.get('/auth/google', (req, res, next) => {
@@ -915,20 +917,28 @@ app.post('/api/auth/register', (req, res) => {
 });
 
 // Devuelve qué está configurado (nunca los valores)
-app.get('/api/config', (_req, res) => {
+app.get('/api/config', (req, res) => {
   res.json({
     gemini:    !!getKey('GEMINI_API_KEY'),
     openai:    !!getKey('OPENAI_API_KEY'),
     anthropic: !!getKey('ANTHROPIC_API_KEY'),
     googleAuth: isGoogleAuthConfigured(),
-    allowedEmails: getAllowedEmails(),
+    allowedEmails: req.isAuthenticated() ? getAllowedEmails() : [],
     appUrl: getKey('APP_URL') || '',
     ollamaNumGpu: getKey('OLLAMA_NUM_GPU') ?? '1',
   });
 });
 
 // Guarda la configuración
-app.post('/api/config', (req, res) => {
+app.post('/api/config', requireAuth, (req, res) => {
+  // Con Google configurado y una lista de permitidos, solo esos correos pueden cambiar la configuración global.
+  if (isGoogleAuthConfigured()) {
+    const email = String((req.user as any)?.email || '').toLowerCase();
+    const allowed = getAllowedEmails();
+    if (allowed.length > 0 && !allowed.includes(email)) {
+      return res.status(403).json({ error: 'No tenés permiso para cambiar la configuración.' });
+    }
+  }
   try {
     const {
       GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY,

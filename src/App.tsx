@@ -3362,7 +3362,7 @@ ${noteToExport.transcription || 'Sin guion transcrito registrado.'}
                   <div className="grid grid-cols-2 gap-md">
                     {(['local', 'drive'] as const).map((mode) => {
                       const isActive = storageMode === mode;
-                      const driveAvailable = !!authState?.user?.accessToken || mode === 'local';
+                      const driveAvailable = !!authState?.user?.hasDriveAccess || mode === 'local';
                       const disabled = mode === 'drive' && !authState?.user;
                       return (
                         <button
