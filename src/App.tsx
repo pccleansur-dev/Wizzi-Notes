@@ -387,6 +387,13 @@ export default function App() {
   } | null>(null);
   const [whisperSwitching, setWhisperSwitching] = useState<string | null>(null);
   const [whisperHint, setWhisperHint] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ id: number; message: string; tone: 'ok' | 'warn' } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = useCallback((message: string, tone: 'ok' | 'warn' = 'ok') => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ id: Date.now(), message, tone });
+    toastTimer.current = setTimeout(() => setToast(null), 3500);
+  }, []);
   const [modelDownloads, setModelDownloads] = useState<Record<string, { state: 'idle'|'downloading'|'done'|'error'; percent: number; error: string }>>({});
   const [downloadedSet, setDownloadedSet] = useState<Set<string>>(new Set());
   // modelId -> filename of the quant actually downloaded (any quant)
@@ -2902,6 +2909,7 @@ ${noteToExport.transcription || 'Sin guion transcrito registrado.'}
                                   } catch {}
                                 }
                                 setLoadedModel(activateFilename);
+                                showToast(`Ahora usamos ${activateFilename.replace(/\.gguf$/i, '')} como modelo de IA`);
                               } catch (err: any) {
                                 setDl({ state: 'error', error: err.message || 'Error activando' });
                               } finally {
@@ -3158,6 +3166,11 @@ ${noteToExport.transcription || 'Sin guion transcrito registrado.'}
                           onClick={() => {
                             setAsrProvider(engine.id);
                             localStorage.setItem('wizzi_asr_provider', engine.id);
+                            const name = engine.id === 'whisper'
+                              ? `Whisper${asrStatus?.whisper?.model ? ` (${asrStatus.whisper.model})` : ''}`
+                              : 'Nemotron 3.5';
+                            if (available === false) showToast(`Seleccionaste ${name}, pero no está disponible ahora`, 'warn');
+                            else showToast(`Ahora usamos ${name} para transcribir`);
                           }}
                           className={`text-left rounded-xl border p-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
                             active
@@ -3215,6 +3228,7 @@ ${noteToExport.transcription || 'Sin guion transcrito registrado.'}
                         if (d.ok) {
                           setWhisperInfo(prev => ({ ...prev!, model: modelId }));
                           if (!d.restarted) setWhisperHint(d.hint);
+                          showToast(`Ahora usamos Whisper ${modelId}`);
                         }
                       } catch {
                         setWhisperHint('docker compose restart whisper');
@@ -3636,6 +3650,33 @@ ${noteToExport.transcription || 'Sin guion transcrito registrado.'}
                 </button>
               </div>
             </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Toast de confirmación (cambio de motor / modelo) */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            key={toast.id}
+            role="status"
+            aria-live="polite"
+            initial={{ opacity: 0, y: -16 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -16 }}
+            transition={{ duration: 0.2 }}
+            className="fixed top-20 left-1/2 -translate-x-1/2 z-[70] max-w-[90vw] pointer-events-none"
+          >
+            <div className={`flex items-center gap-2 px-md py-sm rounded-xl border shadow-2xl backdrop-blur-md text-body-sm font-bold ${
+              toast.tone === 'ok'
+                ? 'bg-surface-container-high/95 border-emerald-400/30 text-on-surface'
+                : 'bg-surface-container-high/95 border-amber-400/40 text-on-surface'
+            }`}>
+              {toast.tone === 'ok'
+                ? <Cpu size={16} className="text-emerald-400 shrink-0" />
+                : <AlertTriangle size={16} className="text-amber-400 shrink-0" />}
+              <span>{toast.message}</span>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
