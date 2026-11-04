@@ -123,7 +123,7 @@ const SEED_NOTES: Note[] = [
 ];
 
 // Resample audio blob to 16kHz mono WAV — optimal format for Whisper
-async function resampleToWav(blob: Blob): Promise<{ base64: string; mimeType: string }> {
+async function resampleToWav(blob: Blob): Promise<{ base64: string; mimeType: string; rms?: number }> {
   try {
     const arrayBuffer = await blob.arrayBuffer();
     const audioCtx = new AudioContext({ sampleRate: 16000 });
@@ -141,6 +141,17 @@ async function resampleToWav(blob: Blob): Promise<{ base64: string; mimeType: st
 
     // Encode to 16-bit PCM WAV
     const pcm = rendered.getChannelData(0);
+
+    // Nivel de la señal: micrófonos con poca ganancia dan voz casi inaudible para el ASR.
+    let sumSq = 0, peak = 0;
+    for (let i = 0; i < pcm.length; i++) { const a = Math.abs(pcm[i]); sumSq += a * a; if (a > peak) peak = a; }
+    const rms = Math.sqrt(sumSq / Math.max(pcm.length, 1));
+    // Si hay señal real (no silencio) y es débil, normalizar hacia RMS ~0.08 sin saturar (ganancia máx. 30x).
+    if (rms > 0.004 && rms < 0.06 && peak > 0) {
+      const gain = Math.min(0.08 / rms, 0.95 / peak, 30);
+      if (gain > 1) for (let i = 0; i < pcm.length; i++) pcm[i] *= gain;
+    }
+
     const wavBuffer = new ArrayBuffer(44 + pcm.length * 2);
     const view = new DataView(wavBuffer);
     const writeStr = (off: number, s: string) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
@@ -166,7 +177,7 @@ async function resampleToWav(blob: Blob): Promise<{ base64: string; mimeType: st
       reader.onload = () => resolve((reader.result as string).split(',')[1]);
       reader.readAsDataURL(wavBlob);
     });
-    return { base64, mimeType: 'audio/wav' };
+    return { base64, mimeType: 'audio/wav', rms };
   } catch {
     // Fallback: send original if resampling fails
     const reader = new FileReader();
@@ -520,7 +531,12 @@ export default function App() {
     const promise: Promise<void> = (async () => {
       setInFlightCount((c) => c + 1);
       try {
-        const { base64, mimeType } = await resampleToWav(batchBlob);
+        const { base64, mimeType, rms } = await resampleToWav(batchBlob);
+        // Trozo en silencio: no se envía (evita alucinaciones tipo "¡Suscríbete!" y peticiones inútiles)
+        if (rms !== undefined && rms < 0.003) {
+          batchResultsRef.current.set(batchIdx, '');
+          return;
+        }
         const res = await fetch('/api/transcribe-chunk', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -546,7 +562,7 @@ export default function App() {
   const handleToggleRecording = useCallback(async () => {
     if (isRecording) { handleStopRecording(); return; }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
       const audioCtx = new AudioContext();
       const source = audioCtx.createMediaStreamSource(stream);
