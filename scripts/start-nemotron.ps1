@@ -21,6 +21,8 @@ if (-not (Test-Path -LiteralPath $model)) {
   throw 'Falta el modelo Nemotron 3.5 Q8. Descargalo siguiendo README.md.'
 }
 
+# El runtime escribe su log en stderr: con 'Stop' PowerShell lo tomaría como error y mataría el proceso.
+$ErrorActionPreference = 'Continue'
 Write-Host "Nemotron 3.5 ASR: http://${BindHost}:$Port"
 & $runtime serve `
   --host $BindHost `
