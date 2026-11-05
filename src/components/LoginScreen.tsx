@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { Sparkles, AlertCircle } from 'lucide-react';
+import { BetaNotice } from './BetaBanner';
 
 export default function LoginScreen() {
   const [error, setError] = useState('');
@@ -19,7 +20,7 @@ export default function LoginScreen() {
         initial={{ opacity: 0, y: 24 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.35 }}
-        className="w-full max-w-sm text-center"
+        className="w-full max-w-md text-center"
       >
         {/* Logo */}
         <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-primary/10 border border-primary/20 mb-6">
@@ -30,6 +31,8 @@ export default function LoginScreen() {
         <p className="text-on-surface-variant text-sm mb-8">
           Suite de productividad con IA para tu agencia.
         </p>
+
+        <BetaNotice />
 
         {error && (
           <div className="flex items-start gap-2 bg-error/10 border border-error/20 rounded-xl p-3 mb-6 text-left">
@@ -53,7 +56,7 @@ export default function LoginScreen() {
         </a>
 
         <p className="text-[11px] text-on-surface-variant/40 mt-6">
-          Solo cuentas autorizadas pueden acceder.
+          Acceso gratuito durante la beta con cualquier cuenta de Google.
         </p>
       </motion.div>
     </div>

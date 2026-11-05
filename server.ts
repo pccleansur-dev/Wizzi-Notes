@@ -14,6 +14,7 @@ import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import dotenv from 'dotenv';
 import { transcribeAudio, resolveAsrProvider, type AsrProvider } from './src/server/asr';
 import { FileSessionStore } from './src/server/fileSessionStore';
+import { AdminStore } from './src/server/adminStore';
 import { applyWhisperModel, getRunningWhisperModel, WHISPER_MODELS } from './src/server/dockerWhisper';
 
 dotenv.config();
@@ -44,6 +45,7 @@ const IS_PROD = process.env.NODE_ENV === 'production';
 const CONFIG_DIR = path.join(process.cwd(), 'config');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'keys.json');
 const USERS_DIR = path.join(CONFIG_DIR, 'users');
+const adminStore = new AdminStore(path.join(CONFIG_DIR, 'admin'));
 
 // ─── Security headers ─────────────────────────────────────────────────────────
 app.use(helmet({
@@ -78,6 +80,7 @@ function getGoogleStrategy() {
 
   return new GoogleStrategy({ clientID, clientSecret, callbackURL }, (accessToken, _rt, profile, done) => {
     const email = profile.emails?.[0]?.value?.toLowerCase() || '';
+    if (email) adminStore.recordLogin(email, profile.displayName, profile.photos?.[0]?.value);
     return done(null, {
       id: profile.id,
       email,
@@ -202,6 +205,24 @@ function isEmailAllowed(email: string): boolean {
   const allowed = getAllowedEmails();
   // Lista vacía = cualquiera puede entrar con keys globales
   return allowed.length === 0 || allowed.includes(email.toLowerCase());
+}
+
+// Superusuarios: ven el panel de administración y pueden cambiar la configuración global.
+function getSuperuserEmails(): string[] {
+  const raw = getKey('SUPERUSER_EMAILS' as any) || 'pccleansur@gmail.com';
+  return raw.split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
+}
+
+function isSuperuser(req: Request): boolean {
+  const email = String((req.user as any)?.email || '').toLowerCase();
+  return !!email && getSuperuserEmails().includes(email);
+}
+
+function requireSuperuser(req: Request, res: Response, next: NextFunction) {
+  if (!isGoogleAuthConfigured()) return next(); // desarrollo local sin login
+  if (!req.isAuthenticated()) return res.status(401).json({ error: 'No autenticado.' });
+  if (!isSuperuser(req)) return res.status(403).json({ error: 'Solo para superusuarios.' });
+  next();
 }
 
 // Resuelve las keys para el usuario activo en el request
@@ -870,7 +891,8 @@ app.get('/api/auth/me', (req, res) => {
 
   // El accessToken de Google se queda en la sesión del servidor: nunca se envía al navegador.
   const { accessToken, ...safeUser } = user;
-  res.json({ user: { ...safeUser, hasDriveAccess: !!accessToken }, authRequired: true, needsRegistration });
+  if (user.email) adminStore.touch(user.email, user.name, user.avatar);
+  res.json({ user: { ...safeUser, hasDriveAccess: !!accessToken, isSuperuser: isSuperuser(req) }, authRequired: true, needsRegistration });
 });
 
 app.get('/auth/google', (req, res, next) => {
@@ -930,15 +952,7 @@ app.get('/api/config', (req, res) => {
 });
 
 // Guarda la configuración
-app.post('/api/config', requireAuth, (req, res) => {
-  // Con Google configurado y una lista de permitidos, solo esos correos pueden cambiar la configuración global.
-  if (isGoogleAuthConfigured()) {
-    const email = String((req.user as any)?.email || '').toLowerCase();
-    const allowed = getAllowedEmails();
-    if (allowed.length > 0 && !allowed.includes(email)) {
-      return res.status(403).json({ error: 'No tenés permiso para cambiar la configuración.' });
-    }
-  }
+app.post('/api/config', requireSuperuser, (req, res) => {
   try {
     const {
       GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY,
@@ -956,6 +970,69 @@ app.post('/api/config', requireAuth, (req, res) => {
   } catch {
     res.status(500).json({ error: 'No se pudo guardar la configuración.' });
   }
+});
+
+// ─── Uso por cuenta (para el panel de superusuario) ───────────────────────────
+const USAGE_ROUTES: Record<string, 'transcribeChunks' | 'processes' | 'chats'> = {
+  '/transcribe-chunk': 'transcribeChunks',
+  '/process': 'processes',
+  '/chat': 'chats',
+};
+app.use('/api', (req, res, next) => {
+  const key = req.method === 'POST' ? USAGE_ROUTES[req.path] : undefined;
+  const email = (req.user as any)?.email;
+  if (key && email) {
+    res.on('finish', () => {
+      if (res.statusCode < 400) adminStore.recordUsage(email, key, key === 'transcribeChunks' ? 5 : 0);
+    });
+  }
+  next();
+});
+
+// ─── Reportes de fallas (cualquier usuario logueado) ──────────────────────────
+app.post('/api/reports', requireAuth, (req, res) => {
+  const user = (req.user as any) || {};
+  const message = String(req.body?.message || '').trim().slice(0, 3000);
+  if (message.length < 3) return res.status(400).json({ error: 'Contanos qué pasó.' });
+  const ctx = req.body?.context && typeof req.body.context === 'object' ? req.body.context : {};
+  // Solo contexto técnico acotado; nada de contenido de las notas.
+  const context = {
+    tab: String(ctx.tab || '').slice(0, 40),
+    asrProvider: String(ctx.asrProvider || '').slice(0, 20),
+    lastError: String(ctx.lastError || '').slice(0, 600),
+    url: String(ctx.url || '').slice(0, 200),
+    userAgent: String(req.headers['user-agent'] || '').slice(0, 300),
+  };
+  const r = adminStore.addReport({ email: user.email || 'anónimo', name: user.name || '', message, context });
+  console.log(`[report] ${r.email}: ${message.slice(0, 120)}`);
+  res.json({ ok: true, id: r.id });
+});
+
+// ─── Panel de superusuario ────────────────────────────────────────────────────
+app.get('/api/admin/users', requireSuperuser, (_req, res) => {
+  const users = adminStore.listUsers();
+  const totals = users.reduce((t, u) => ({
+    chunks: t.chunks + u.usage.transcribeChunks,
+    processes: t.processes + u.usage.processes,
+    chats: t.chats + u.usage.chats,
+    audioSeconds: t.audioSeconds + u.audioSeconds,
+  }), { chunks: 0, processes: 0, chats: 0, audioSeconds: 0 });
+  res.json({ users, totals, superusers: getSuperuserEmails() });
+});
+
+app.get('/api/admin/reports', requireSuperuser, (_req, res) => {
+  res.json({ reports: adminStore.listReports() });
+});
+
+app.patch('/api/admin/reports/:id', requireSuperuser, (req, res) => {
+  const status = req.body?.status === 'resolved' ? 'resolved' : 'open';
+  if (!adminStore.setReportStatus(req.params.id, status)) return res.status(404).json({ error: 'No existe.' });
+  res.json({ ok: true });
+});
+
+app.delete('/api/admin/reports/:id', requireSuperuser, (req, res) => {
+  if (!adminStore.deleteReport(req.params.id)) return res.status(404).json({ error: 'No existe.' });
+  res.json({ ok: true });
 });
 
 app.get('/api/progress/:jobId', requireAuth, (req, res) => {
@@ -1219,7 +1296,7 @@ app.get('/api/hardware', requireAuth, async (_req, res) => {
 });
 
 // Save host hardware overrides to .env
-app.post('/api/hardware/override', requireAuth, async (req, res) => {
+app.post('/api/hardware/override', requireSuperuser, async (req, res) => {
   const { HOST_CPU, HOST_GPU, HOST_VRAM_GB, HOST_RAM_GB } = req.body as Record<string, string>;
   const envPath = path.resolve(process.cwd(), '.env');
   try {
@@ -1355,7 +1432,7 @@ function sendDownloadProgress(filename: string, data: object) {
   }
 }
 
-app.post('/api/llamacpp/download', requireAuth, async (req, res) => {
+app.post('/api/llamacpp/download', requireSuperuser, async (req, res) => {
   const { url, filename } = req.body as { url: string; filename: string };
   if (!url || !filename) return res.status(400).json({ error: 'url y filename requeridos' });
   if (!filename.endsWith('.gguf')) return res.status(400).json({ error: 'Solo archivos .gguf' });
@@ -1449,7 +1526,7 @@ function restartContainer(name: string): Promise<void> {
 const ACTIVE_LLM_FILE = path.join(process.cwd(), 'config', 'active-llm.txt');
 
 // Activate a downloaded GGUF: point active.gguf symlink at it + restart llamacpp
-app.post('/api/llamacpp/set-model', requireAuth, async (req, res) => {
+app.post('/api/llamacpp/set-model', requireSuperuser, async (req, res) => {
   const { filename } = req.body as { filename: string };
   if (!filename || !filename.endsWith('.gguf')) {
     return res.status(400).json({ error: 'filename .gguf requerido' });
@@ -1481,7 +1558,7 @@ app.post('/api/llamacpp/set-model', requireAuth, async (req, res) => {
 });
 
 // Change Whisper model: update .env + restart whisper container
-app.post('/api/whisper/set-model', requireAuth, async (req, res) => {
+app.post('/api/whisper/set-model', requireSuperuser, async (req, res) => {
   const { model } = req.body as { model: string };
   const VALID = WHISPER_MODELS as readonly string[];
   if (!VALID.includes(model)) return res.status(400).json({ error: 'Modelo inválido' });

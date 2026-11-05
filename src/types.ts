@@ -25,7 +25,7 @@ export interface ChatMessage {
   timestamp: string;
 }
 
-export type ActiveTab = 'dashboard' | 'transcribe' | 'notes' | 'files-chat' | 'settings';
+export type ActiveTab = 'dashboard' | 'transcribe' | 'notes' | 'files-chat' | 'settings' | 'admin';
 
 export type AIProvider = 'gemini' | 'openai' | 'anthropic' | 'local';
 export type AsrProvider = 'whisper' | 'nemotron';

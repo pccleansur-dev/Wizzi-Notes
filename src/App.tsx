@@ -44,6 +44,8 @@ import {
   Maximize2,
   Minimize2,
   Cpu,
+  ShieldCheck,
+  Bug,
 } from 'lucide-react';
 import { Note, ActiveTab, AIProviderConfig, AIProvider, AsrProvider, DEFAULT_PROVIDER_CONFIG, PROVIDER_OPTIONS, LOCAL_MODELS, GpuProfile, QuantLevel, QUANT_OPTIONS, ggufFilename, ggufDownloadUrl, effectiveScores, CapabilityScores } from './types';
 import UploadZone from './components/UploadZone';
@@ -54,6 +56,9 @@ import SetupScreen from './components/SetupScreen';
 import SettingsKeyForm from './components/SettingsKeyForm';
 import LoginScreen from './components/LoginScreen';
 import RegisterScreen from './components/RegisterScreen';
+import AdminPanel from './components/AdminPanel';
+import ReportModal from './components/ReportModal';
+import { BetaStrip } from './components/BetaBanner';
 import { motion, AnimatePresence } from 'motion/react';
 import { getAllNotes, saveNote, deleteNoteFromDB, clearAllNotes, importNotes } from './lib/db';
 import { exportToPDF } from './lib/pdfGenerator';
@@ -371,7 +376,16 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('Todas');
   const [userName, setUserName] = useState(() => localStorage.getItem('wizzi_username') || 'Alex Dev');
-  const [userPlan, setUserPlan] = useState('Plan Pro');
+  const [userPlan, setUserPlan] = useState('Beta gratuita');
+  const [showReport, setShowReport] = useState(false);
+  const lastErrorRef = useRef('');
+  useEffect(() => {
+    const onErr = (e: ErrorEvent) => { lastErrorRef.current = String(e.message || '').slice(0, 300); };
+    const onRej = (e: PromiseRejectionEvent) => { lastErrorRef.current = String((e.reason && e.reason.message) || e.reason || '').slice(0, 300); };
+    window.addEventListener('error', onErr);
+    window.addEventListener('unhandledrejection', onRej);
+    return () => { window.removeEventListener('error', onErr); window.removeEventListener('unhandledrejection', onRej); };
+  }, []);
   const [providerConfig, setProviderConfig] = useState<AIProviderConfig>(() => {
     try {
       const saved = localStorage.getItem('wizzi_provider_config');
@@ -998,6 +1012,7 @@ export default function App() {
     if (tokenFlushTimerRef.current) { clearInterval(tokenFlushTimerRef.current); tokenFlushTimerRef.current = null; }
     setIsTranscribing(false);
     setStreamingText('');
+    lastErrorRef.current = String(errorMsg).slice(0, 300);
     alert(`Error: ${errorMsg}`);
   };
 
@@ -1309,6 +1324,13 @@ ${noteToExport.transcription || 'Sin guion transcrito registrado.'}
   return (
     <div className="h-screen overflow-hidden bg-[#131313] text-[#e5e2e1] font-sans selection:bg-primary-container selection:text-white" id="wizzi-note-root">
 
+      {showReport && (
+        <ReportModal
+          onClose={() => setShowReport(false)}
+          context={{ tab: activeTab, asrProvider, lastError: lastErrorRef.current }}
+        />
+      )}
+
       {isTranscribing && (
         <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex flex-col items-center justify-start pt-12 px-4 md:px-8 pb-8 gap-4 overflow-hidden">
           {/* Header */}
@@ -1384,7 +1406,7 @@ ${noteToExport.transcription || 'Sin guion transcrito registrado.'}
               <div className="flex items-center justify-between pb-md mb-md border-b border-white/5">
                 <div className="flex items-center gap-sm">
                   <span className="font-headline text-headline-sm text-primary font-black">Wizzi Note</span>
-                  <span className="text-[9px] bg-primary/10 border border-primary/20 text-primary px-2 py-0.5 rounded-full font-bold uppercase tracking-widest">PRO</span>
+                  <span className="text-[9px] bg-amber-400/10 border border-amber-400/30 text-amber-300 px-2 py-0.5 rounded-full font-bold uppercase tracking-widest">BETA</span>
                 </div>
                 <button 
                   onClick={() => setShowMobileMenu(false)}
@@ -1444,7 +1466,23 @@ ${noteToExport.transcription || 'Sin guion transcrito registrado.'}
                 ))}
               </nav>
 
-              <div className="pt-md border-t border-white/5 mt-auto">
+              <div className="pt-md border-t border-white/5 mt-auto space-y-1">
+                {authState?.user?.isSuperuser && (
+                  <button
+                    onClick={() => { setActiveTab('admin'); setShowMobileMenu(false); }}
+                    className="w-full flex items-center gap-md px-md py-3 text-body-sm font-semibold rounded-xl transition-all cursor-pointer text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface"
+                  >
+                    <ShieldCheck size={18} />
+                    Superusuario
+                  </button>
+                )}
+                <button
+                  onClick={() => { setShowReport(true); setShowMobileMenu(false); }}
+                  className="w-full flex items-center gap-md px-md py-3 text-body-sm font-semibold rounded-xl transition-all cursor-pointer text-amber-300 hover:bg-amber-400/10"
+                >
+                  <Bug size={18} />
+                  Reportar un problema
+                </button>
                 <button
                   onClick={() => {
                     setActiveTab('settings');
@@ -1478,7 +1516,7 @@ ${noteToExport.transcription || 'Sin guion transcrito registrado.'}
             <span className="font-headline text-headline-sm text-primary font-bold tracking-tight">Wizzi Note</span>
             <div className="hidden sm:flex items-center gap-1.5 bg-primary/10 border border-primary/20 text-[10px] text-primary px-2.5 py-0.5 rounded-full font-black uppercase tracking-wider">
               <Sparkles size={11} className="animate-spin text-primary" />
-              Plan Pro
+              Beta
             </div>
           </div>
         </div>
@@ -1622,7 +1660,25 @@ ${noteToExport.transcription || 'Sin guion transcrito registrado.'}
             </button>
           </nav>
 
-          <div className="mt-auto p-lg border-t border-white/5">
+          <div className="mt-auto p-lg border-t border-white/5 space-y-1">
+            {authState?.user?.isSuperuser && (
+              <button
+                onClick={() => setActiveTab('admin')}
+                className={`w-full flex items-center gap-md px-lg py-3 text-body-sm font-semibold rounded-xl transition-all cursor-pointer ${
+                  activeTab === 'admin' ? 'bg-primary-container/15 text-primary font-bold' : 'text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface'
+                }`}
+              >
+                <ShieldCheck size={18} />
+                Superusuario
+              </button>
+            )}
+            <button
+              onClick={() => setShowReport(true)}
+              className="w-full flex items-center gap-md px-lg py-3 text-body-sm font-semibold rounded-xl transition-all cursor-pointer text-amber-300 hover:bg-amber-400/10"
+            >
+              <Bug size={18} />
+              Reportar un problema
+            </button>
             <button
               onClick={() => setActiveTab('settings')}
               className={`w-full flex items-center gap-md px-lg py-3 text-body-sm font-semibold rounded-xl transition-all cursor-pointer ${
@@ -1640,6 +1696,8 @@ ${noteToExport.transcription || 'Sin guion transcrito registrado.'}
         {/* Central Core Work Window */}
         <main className="flex-1 flex flex-col min-w-0 h-full overflow-y-auto custom-scrollbar bg-[#131313]" style={{ WebkitOverflowScrolling: 'touch' }}>
           
+          <BetaStrip onReport={() => setShowReport(true)} />
+
           <AnimatePresence mode="wait">
             
             {/* ====== TAB 1: DASHBOARD (PANEL DE CONTROL) ====== */}
@@ -2572,6 +2630,12 @@ ${noteToExport.transcription || 'Sin guion transcrito registrado.'}
                   </aside>
                 </div>
 
+              </motion.div>
+            )}
+
+            {activeTab === 'admin' && authState?.user?.isSuperuser && (
+              <motion.div key="admin-tab" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -15 }}>
+                <AdminPanel />
               </motion.div>
             )}
 
