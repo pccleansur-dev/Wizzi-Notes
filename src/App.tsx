@@ -401,6 +401,7 @@ export default function App() {
   const [toast, setToast] = useState<{ id: number; message: string; tone: 'ok' | 'warn' } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const authLostRef = useRef(false);
+  const asrFailStreakRef = useRef(0);
   const showToast = useCallback((message: string, tone: 'ok' | 'warn' = 'ok') => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     setToast({ id: Date.now(), message, tone });
@@ -545,9 +546,16 @@ export default function App() {
           signal: AbortSignal.timeout(28000),
         });
         if (res.status === 401) authLostRef.current = true;
+        if (res.ok) asrFailStreakRef.current = 0;
+        else if (res.status !== 401 && ++asrFailStreakRef.current === 2) {
+          showToast(`${asrProvider === 'nemotron' ? 'Nemotron' : 'Whisper'} no responde: lo que grabás no se está transcribiendo. Detené y revisá el motor.`, 'warn');
+        }
         const text = res.ok ? (JSON.parse(await res.text())?.text?.trim() ?? '') : '';
         batchResultsRef.current.set(batchIdx, text);
       } catch {
+        if (++asrFailStreakRef.current === 2) {
+          showToast(`${asrProvider === 'nemotron' ? 'Nemotron' : 'Whisper'} no responde: lo que grabás no se está transcribiendo. Detené y revisá el motor.`, 'warn');
+        }
         batchResultsRef.current.set(batchIdx, '');
       } finally {
         flushOrderedResults();
@@ -557,10 +565,20 @@ export default function App() {
     })();
 
     inFlightRef.current.add(promise);
-  }, [flushOrderedResults, asrProvider]);
+  }, [flushOrderedResults, asrProvider, showToast]);
 
   const handleToggleRecording = useCallback(async () => {
     if (isRecording) { handleStopRecording(); return; }
+    // Antes de grabar: avisar si el motor elegido no responde (evita perder grabaciones largas).
+    try {
+      const st = await fetch('/api/asr/status', { credentials: 'include', signal: AbortSignal.timeout(6000) }).then((r) => r.json());
+      if (st?.[asrProvider] && st[asrProvider].available === false) {
+        const name = asrProvider === 'nemotron' ? 'Nemotron' : 'Whisper';
+        if (!window.confirm(`${name} no está disponible ahora, así que la grabación NO se va a transcribir.
+
+¿Querés grabar igual?`)) return;
+      }
+    } catch { /* si no se puede consultar el estado, se graba igual */ }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
@@ -581,6 +599,7 @@ export default function App() {
       inFlightRef.current = new Set();
       audioChunksRef.current = [];
       authLostRef.current = false;
+      asrFailStreakRef.current = 0;
       setLiveTranscription('');
       setChunksTranscribed(0);
 
@@ -609,7 +628,7 @@ export default function App() {
     } catch {
       alert('No se pudo acceder al micrófono. Verificá los permisos del navegador.');
     }
-  }, [isRecording, flushBuffer]);
+  }, [isRecording, flushBuffer, asrProvider]);
 
   const handleStopRecording = useCallback(() => {
     if (!mediaRecorderRef.current) return;
@@ -655,7 +674,9 @@ export default function App() {
         handleProcessError(
           authLostRef.current
             ? 'Tu sesión expiró. Recargá la página (Ctrl+F5) e iniciá sesión de nuevo.'
-            : 'No se detectó audio transcribible en la grabación.',
+            : asrFailStreakRef.current > 0
+              ? `${asrProvider === 'nemotron' ? 'Nemotron' : 'Whisper'} no respondió durante la grabación, por eso no hay transcripción. Revisá que el motor esté disponible.`
+              : 'No se detectó audio transcribible en la grabación.',
         );
         return;
       }
@@ -677,7 +698,7 @@ export default function App() {
     };
 
     recorder.stop();
-  }, [providerConfig]);
+  }, [providerConfig, asrProvider]);
 
   // Chequear configuración y autenticación al arrancar
   useEffect(() => {
