@@ -10,7 +10,7 @@ const SOCKET = process.env.DOCKER_SOCKET || '/var/run/docker.sock';
 
 export const WHISPER_MODELS = ['tiny', 'base', 'small', 'medium', 'large', 'large-v2', 'large-v3'] as const;
 
-function docker<T = any>(method: string, apiPath: string, body?: unknown, timeoutMs = 60_000): Promise<{ status: number; data: T }> {
+export function docker<T = any>(method: string, apiPath: string, body?: unknown, timeoutMs = 60_000): Promise<{ status: number; data: T }> {
   return new Promise((resolve, reject) => {
     const payload = body === undefined ? undefined : JSON.stringify(body);
     const req = http.request(
@@ -39,18 +39,26 @@ function docker<T = any>(method: string, apiPath: string, body?: unknown, timeou
   });
 }
 
-async function findWhisperId(): Promise<string> {
+/**
+ * Busca un contenedor hermano (mismo proyecto compose) por nombre de servicio.
+ * Funciona aunque Coolify le ponga un nombre distinto al container_name del compose.
+ */
+export async function findServiceId(service: string): Promise<string> {
   const self = await docker('GET', `/containers/${encodeURIComponent(os.hostname())}/json`);
   if (self.status !== 200) throw new Error('No se pudo inspeccionar el contenedor de la app');
   const project = self.data?.Config?.Labels?.['com.docker.compose.project'];
   if (!project) throw new Error('La app no corre dentro de un proyecto docker compose');
   const filters = encodeURIComponent(JSON.stringify({
-    label: [`com.docker.compose.project=${project}`, 'com.docker.compose.service=whisper'],
+    label: [`com.docker.compose.project=${project}`, `com.docker.compose.service=${service}`],
   }));
   const list = await docker('GET', `/containers/json?all=true&filters=${filters}`);
   const found = Array.isArray(list.data) ? list.data[0] : null;
-  if (!found) throw new Error('No se encontró el contenedor de Whisper');
+  if (!found) throw new Error(`No se encontró el contenedor del servicio ${service}`);
   return found.Id as string;
+}
+
+async function findWhisperId(): Promise<string> {
+  return findServiceId('whisper');
 }
 
 function envValue(env: string[] | undefined, key: string): string | undefined {

@@ -18,6 +18,11 @@ services:
       - LLAMACPP_URL=http://llamacpp:8080
       - WHISPER_URL=http://whisper:9000
       - NEMOTRON_URL=${NEMOTRON_URL:-http://172.17.240.1:9010}
+      # Agente de Nemotron en Windows (puerto 9011 del mismo host) y token de control para los accesos directos.
+      # Sin NEMOTRON_AGENT_TOKEN, el switch de Nemotron queda desactivado.
+      - NEMOTRON_AGENT_URL=${NEMOTRON_AGENT_URL:-}
+      - NEMOTRON_AGENT_TOKEN=${NEMOTRON_AGENT_TOKEN:-}
+      - GPU_CONTROL_TOKEN=${GPU_CONTROL_TOKEN:-}
       - ASR_PROVIDER=${ASR_PROVIDER:-whisper}
       - ASR_LANGUAGE=${ASR_LANGUAGE:-es-ES}
       - ASR_MODEL=${ASR_MODEL:-small}

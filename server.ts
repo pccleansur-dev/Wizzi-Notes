@@ -15,7 +15,11 @@ import dotenv from 'dotenv';
 import { transcribeAudio, resolveAsrProvider, type AsrProvider } from './src/server/asr';
 import { FileSessionStore } from './src/server/fileSessionStore';
 import { AdminStore } from './src/server/adminStore';
-import { applyWhisperModel, getRunningWhisperModel, WHISPER_MODELS } from './src/server/dockerWhisper';
+import { applyWhisperModel, getRunningWhisperModel, findServiceId, WHISPER_MODELS } from './src/server/dockerWhisper';
+import {
+  initGpuMode, startGpuModeWatcher, getGpuStatus, setGpuMode, isGpuPaused, gpuPausedMessage,
+  beginLocalJob, endLocalJob, DEFAULT_RESUME_HOURS, MAX_RESUME_HOURS, setNemotron,
+} from './src/server/gpuMode';
 
 dotenv.config();
 
@@ -46,6 +50,7 @@ const CONFIG_DIR = path.join(process.cwd(), 'config');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'keys.json');
 const USERS_DIR = path.join(CONFIG_DIR, 'users');
 const adminStore = new AdminStore(path.join(CONFIG_DIR, 'admin'));
+initGpuMode(CONFIG_DIR);
 
 // ─── Security headers ─────────────────────────────────────────────────────────
 app.use(helmet({
@@ -1068,13 +1073,24 @@ app.get('/api/result/:jobId', requireAuth, (req, res) => {
 app.post('/api/transcribe-chunk', requireAuth, async (req, res) => {
   const { fileData, mimeType, asrProvider } = req.body;
   if (!fileData) return res.status(400).json({ error: 'fileData requerido' });
+  let counted = false;
   try {
     const provider = resolveAsrProvider(asrProvider ?? DEFAULT_ASR_PROVIDER);
+    // Whisper corre en la GPU del servidor: con la GPU liberada se rechaza con un mensaje claro.
+    if (provider === 'whisper') {
+      if (isGpuPaused()) {
+        return res.status(503).json({ error: gpuPausedMessage(), code: 'gpu_paused' });
+      }
+      beginLocalJob();
+      counted = true;
+    }
     const text = await transcribeWithAsr(fileData, mimeType || 'audio/webm', provider);
     res.json({ text });
   } catch (e: any) {
     console.error('[transcribe-chunk]', e.message);
     res.status(500).json({ error: e.message });
+  } finally {
+    if (counted) endLocalJob();
   }
 });
 
@@ -1092,6 +1108,13 @@ app.post('/api/process', requireAuth, async (req, res) => {
       return res.status(400).json({ error: e.message });
     }
   }
+
+  // IA local en pausa (GPU liberada): rechazar antes de aceptar el trabajo
+  if (provider === 'local' && isGpuPaused()) {
+    return res.status(503).json({ error: gpuPausedMessage(), code: 'gpu_paused' });
+  }
+  // Trabajo local en curso: impide liberar la GPU hasta que termine (se descuenta en el finally del job)
+  if (provider === 'local') beginLocalJob();
 
   // Respond immediately — result will arrive via SSE to avoid tunnel timeout
   res.json({ status: 'processing', jobId });
@@ -1131,6 +1154,8 @@ app.post('/api/process', requireAuth, async (req, res) => {
     } catch (error: any) {
       console.error('Error en /api/process:', error);
       emitProgress(jobId, { stage: 'error', message: sanitizeError(error) });
+    } finally {
+      if (provider === 'local') endLocalJob();
     }
   });
 });
@@ -1550,7 +1575,14 @@ app.post('/api/llamacpp/set-model', requireSuperuser, async (req, res) => {
 
   // Restart llamacpp so it loads the new model
   try {
-    await restartContainer('wizzi-note-llamacpp-1');
+    // En modo GPU libre no se enciende llamacpp: el modelo nuevo se cargará al reactivar la IA.
+    if (isGpuPaused()) {
+      // active.gguf ya apunta al modelo nuevo: se cargará solo al reactivar la IA.
+      return res.json({ ok: true, model: filename, restarted: false, hint: 'La GPU está liberada: el modelo se cargará al reactivar la IA.' });
+    }
+    // Coolify nombra los contenedores distinto al container_name del compose: buscar por servicio.
+    const llamaTarget = await findServiceId('llamacpp').catch(() => 'wizzi-note-llamacpp-1');
+    await restartContainer(llamaTarget);
     res.json({ ok: true, model: filename, restarted: true });
   } catch (e) {
     res.json({ ok: true, model: filename, restarted: false, hint: 'docker restart wizzi-note-llamacpp-1', detail: String(e) });
@@ -1562,6 +1594,11 @@ app.post('/api/whisper/set-model', requireSuperuser, async (req, res) => {
   const { model } = req.body as { model: string };
   const VALID = WHISPER_MODELS as readonly string[];
   if (!VALID.includes(model)) return res.status(400).json({ error: 'Modelo inválido' });
+
+  // GPU liberada: cambiar el modelo recrearía (y encendería) Whisper. Se pide reactivar la IA primero.
+  if (isGpuPaused()) {
+    return res.status(409).json({ error: 'La GPU está liberada. Reactivá la IA antes de cambiar el modelo de Whisper.', code: 'gpu_paused' });
+  }
 
   // Camino principal: recrear el contenedor de Whisper con el modelo nuevo vía Docker (socket montado)
   try {
@@ -1601,6 +1638,57 @@ app.post('/api/whisper/set-model', requireSuperuser, async (req, res) => {
   });
 });
 
+// ─── Modo GPU: liberar la VRAM (apaga llamacpp y Whisper) o volver a encenderlos ───
+// Estado: cualquier usuario autenticado (para mostrar el aviso). Cambio: solo superusuario.
+app.get('/api/gpu-mode', (req, res, next) => (hasValidGpuToken(req) ? next() : requireAuth(req, res, next)), async (req, res) => {
+  try {
+    const status = await getGpuStatus();
+    res.json({ ...status, canToggle: hasValidGpuToken(req) || !isGoogleAuthConfigured() || isSuperuser(req), defaultHours: DEFAULT_RESUME_HOURS, maxHours: MAX_RESUME_HOURS });
+  } catch (e: any) {
+    res.status(500).json({ error: 'No se pudo leer el estado de la GPU.', detail: String(e?.message || e) });
+  }
+});
+
+// Los accesos directos de Windows ("Modo ComfyUI") no tienen sesión: se identifican con un token
+// de control (variable GPU_CONTROL_TOKEN, header X-GPU-Token). Sin la variable, solo entran superusuarios.
+function hasValidGpuToken(req: Request): boolean {
+  const expected = (process.env.GPU_CONTROL_TOKEN || '').trim();
+  const given = String(req.headers['x-gpu-token'] || '').trim();
+  if (expected.length < 32 || !given) return false;
+  const h = (s: string) => crypto.createHash('sha256').update(s).digest();
+  return crypto.timingSafeEqual(h(given), h(expected));
+}
+function requireSuperuserOrGpuToken(req: Request, res: Response, next: NextFunction) {
+  if (hasValidGpuToken(req)) return next();
+  return requireSuperuser(req, res, next);
+}
+
+app.post('/api/gpu-mode/nemotron', requireSuperuserOrGpuToken, async (req, res) => {
+  const { on } = (req.body || {}) as { on?: boolean };
+  if (typeof on !== 'boolean') return res.status(400).json({ error: 'on debe ser true o false.' });
+  try {
+    const nemotron = await setNemotron(on);
+    console.log(`[gpu-mode] Nemotron -> ${on ? 'despierto' : 'dormido'}`);
+    res.json({ nemotron });
+  } catch (e: any) {
+    res.status(502).json({ error: String(e?.message || e) });
+  }
+});
+
+app.post('/api/gpu-mode', requireSuperuserOrGpuToken, async (req, res) => {
+  const { mode, hours, force } = (req.body || {}) as { mode?: string; hours?: number; force?: boolean };
+  if (mode !== 'ai' && mode !== 'free') return res.status(400).json({ error: 'mode debe ser "ai" o "free".' });
+  try {
+    const status = await setGpuMode(mode, { hours, force: force === true });
+    console.log(`[gpu-mode] modo -> ${mode}${mode === 'free' ? ` (reactivación automática en ${hours ?? DEFAULT_RESUME_HOURS} h)` : ''}`);
+    res.json(status);
+  } catch (e: any) {
+    const code = e?.code;
+    const httpStatus = code === 'busy' || code === 'jobs' ? 409 : 500;
+    res.status(httpStatus).json({ error: String(e?.message || e), code });
+  }
+});
+
 // Priority: Gemini > OpenAI > Anthropic > llama.cpp local
 app.get('/api/best-model', requireAuth, async (req, res) => {
   try {
@@ -1625,6 +1713,9 @@ app.post('/api/chat', requireAuth, async (req, res) => {
     if (!VALID_PROVIDERS.has(provider)) {
       return res.status(400).json({ error: 'Proveedor no válido.' });
     }
+    if (provider === 'local' && isGpuPaused()) {
+      return res.status(503).json({ error: gpuPausedMessage(), code: 'gpu_paused' });
+    }
 
     const defaultModels: Record<string, string> = {
       gemini: 'gemini-2.0-flash',
@@ -1638,7 +1729,12 @@ app.post('/api/chat', requireAuth, async (req, res) => {
 
     let text: string | null | undefined;
     if (provider === 'local') {
-      text = await chatWithLocalDoc(message, transcript, history);
+      beginLocalJob();
+      try {
+        text = await chatWithLocalDoc(message, transcript, history);
+      } finally {
+        endLocalJob();
+      }
     } else if (provider === 'openai') {
       text = await chatWithOpenAI(message, transcript, history, resolvedModel, userKey);
     } else if (provider === 'anthropic') {
@@ -1767,6 +1863,7 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Wizzi Note corriendo en: http://localhost:${PORT}`);
+    startGpuModeWatcher();
 
     // Tras un redespliegue el compose recrea Whisper con el modelo por defecto: reaplicar el elegido por el usuario.
     setTimeout(async () => {

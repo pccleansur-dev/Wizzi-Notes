@@ -54,6 +54,7 @@ import AIChatSidebar from './components/AIChatSidebar';
 import WaveformCanvas from './components/WaveformCanvas';
 import SetupScreen from './components/SetupScreen';
 import SettingsKeyForm from './components/SettingsKeyForm';
+import GpuModeCard, { GpuModeBanner } from './components/GpuModeCard';
 import LoginScreen from './components/LoginScreen';
 import RegisterScreen from './components/RegisterScreen';
 import AdminPanel from './components/AdminPanel';
@@ -1503,6 +1504,9 @@ ${noteToExport.transcription || 'Sin guion transcrito registrado.'}
         )}
       </AnimatePresence>
 
+      {/* Aviso cuando la IA local está en pausa */}
+      <GpuModeBanner />
+
       {/* Top Application Header */}
       <header className="fixed top-0 w-full z-40 bg-[#131313] border-b border-outline-variant/10 flex justify-between items-center px-margin-mobile md:px-margin-desktop h-16 shadow-sm shadow-[#7C3AED]/15">
         <div className="flex items-center gap-md">
@@ -2661,6 +2665,9 @@ ${noteToExport.transcription || 'Sin guion transcrito registrado.'}
                   </div>
                   <SettingsKeyForm onSaved={() => {}} />
                 </div>
+
+                {/* GPU del servidor: switch para liberar la VRAM (solo superusuarios) */}
+                <GpuModeCard />
 
                 {/* User profile */}
                 <div className="bg-surface-container rounded-xl border border-white/5 p-lg space-y-lg shadow-md">
